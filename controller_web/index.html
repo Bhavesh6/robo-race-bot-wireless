@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>ROBO Race Bot — Cockpit Controller</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --card-bg: #161b22;
+      --border: #30363d;
+      --accent: #58a6ff;
+      --accent-glow: rgba(88, 166, 255, 0.4);
+      --red: #f85149;
+      --red-glow: rgba(248, 81, 73, 0.4);
+      --green: #2ea043;
+      --yellow: #d29922;
+      --text: #f0f6fc;
+      --text-dim: #8b949e;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: none;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      overflow: hidden;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Top Telemetry Bar */
+    header {
+      background: var(--card-bg);
+      border-bottom: 1px solid var(--border);
+      padding: 8px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      font-size: 1.05rem;
+      color: #fff;
+    }
+
+    .brand span {
+      color: var(--accent);
+      font-size: 0.8rem;
+      border: 1px solid var(--accent);
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+
+    .telemetry {
+      display: flex;
+      gap: 16px;
+      font-size: 0.85rem;
+      align-items: center;
+    }
+
+    .telem-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--text-dim);
+    }
+
+    .telem-item strong {
+      color: var(--text);
+    }
+
+    .badge {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--red);
+      box-shadow: 0 0 6px var(--red);
+      transition: background 0.3s, box-shadow 0.3s;
+    }
+
+    .badge.connected {
+      background: var(--green);
+      box-shadow: 0 0 8px var(--green);
+    }
+
+    /* Main Cockpit Layout */
+    main {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 220px 1fr;
+      padding: 12px;
+      gap: 12px;
+      height: calc(100vh - 54px - 40px);
+    }
+
+    @media (max-width: 768px) {
+      main {
+        grid-template-columns: 1fr 1fr;
+        grid-template-rows: auto 1fr;
+        height: auto;
+      }
+      .center-panel {
+        grid-column: 1 / -1;
+        order: -1;
+      }
+    }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
+
+    .card-title {
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--text-dim);
+      margin-bottom: 8px;
+      text-align: center;
+    }
+
+    /* Joystick Area */
+    .joystick-container {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+    }
+
+    canvas.joystick-canvas {
+      width: 100%;
+      height: 100%;
+      max-width: 260px;
+      max-height: 260px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(88,166,255,0.05) 0%, rgba(22,27,34,0.8) 70%);
+      border: 2px dashed rgba(255,255,255,0.1);
+    }
+
+    /* Center Dashboard */
+    .center-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    /* Motor Power Gauges */
+    .motor-gauges {
+      display: flex;
+      justify-content: space-around;
+      background: rgba(0,0,0,0.25);
+      border-radius: 8px;
+      padding: 10px;
+    }
+
+    .gauge-col {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.75rem;
+      color: var(--text-dim);
+    }
+
+    .gauge-bar-wrapper {
+      width: 20px;
+      height: 90px;
+      background: #21262d;
+      border-radius: 10px;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+    }
+
+    .gauge-bar {
+      width: 100%;
+      background: linear-gradient(to top, #2ea043, #58a6ff);
+      height: 0%;
+      transition: height 0.08s ease-out;
+    }
+
+    .gauge-val {
+      font-weight: bold;
+      color: var(--text);
+    }
+
+    /* Mode Buttons (Eco, Sport, Turbo) */
+    .mode-group {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 6px;
+    }
+
+    .btn-mode {
+      background: #21262d;
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      padding: 8px 4px;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      font-weight: bold;
+      cursor: pointer;
+      text-align: center;
+      transition: all 0.2s;
+    }
+
+    .btn-mode.active {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+      box-shadow: 0 0 10px var(--accent-glow);
+    }
+
+    .btn-mode[data-mode="turbo"].active {
+      background: var(--red);
+      border-color: var(--red);
+      box-shadow: 0 0 12px var(--red-glow);
+    }
+
+    /* Action Buttons (Horn, Light, Stop) */
+    .action-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .btn-action {
+      background: #21262d;
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 10px;
+      border-radius: 8px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: background 0.2s, transform 0.1s;
+    }
+
+    .btn-action:active {
+      transform: scale(0.96);
+    }
+
+    .btn-action.active {
+      background: #388bfd33;
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .btn-stop {
+      grid-column: 1 / -1;
+      background: var(--red);
+      color: white;
+      border: none;
+      font-weight: 800;
+      letter-spacing: 1px;
+      box-shadow: 0 0 12px var(--red-glow);
+      padding: 12px;
+    }
+
+    .btn-stop:active {
+      background: #da3633;
+    }
+
+    /* Steering Trim Slider */
+    .slider-group {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 0.75rem;
+      color: var(--text-dim);
+    }
+
+    .slider-header {
+      display: flex;
+      justify-content: space-between;
+    }
+
+    input[type=range] {
+      width: 100%;
+      accent-color: var(--accent);
+      height: 6px;
+      background: #21262d;
+      border-radius: 3px;
+    }
+
+    /* Bottom Status / Help Footer */
+    footer {
+      background: #090d13;
+      border-top: 1px solid var(--border);
+      padding: 6px 16px;
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-shrink: 0;
+    }
+
+    .keyboard-hint {
+      display: flex;
+      gap: 12px;
+    }
+
+    .key-badge {
+      background: #21262d;
+      border: 1px solid #30363d;
+      border-radius: 4px;
+      padding: 1px 5px;
+      color: #c9d1d9;
+      font-family: monospace;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Telemetry Header -->
+  <header>
+    <div class="brand">
+      🏎️ ROBO RACE BOT
+      <span>PRO-RACING</span>
+    </div>
+
+    <div class="telemetry">
+      <div class="telem-item">
+        <span class="badge" id="statusBadge"></span>
+        <span id="statusText">Disconnected</span>
+      </div>
+      <div class="telem-item">
+        <span>Ping:</span>
+        <strong id="pingVal">-- ms</strong>
+      </div>
+      <div class="telem-item">
+        <span>Battery:</span>
+        <strong id="batteryVal">-- V</strong>
+      </div>
+      <div class="telem-item">
+        <span>Gamepad:</span>
+        <strong id="gamepadVal">None</strong>
+      </div>
+    </div>
+  </header>
+
+  <!-- Cockpit Grid -->
+  <main>
+    <!-- Left: Dual Joystick (Steering / Direction) -->
+    <section class="card">
+      <div class="card-title">Steering / Throttle Vector</div>
+      <div class="joystick-container">
+        <canvas id="joystickCanvas" class="joystick-canvas" width="260" height="260"></canvas>
+      </div>
+      <div style="text-align: center; font-size: 0.8rem; color: var(--text-dim); margin-top: 6px;">
+        X: <span id="valX" style="color:var(--text);">0</span>% | Y: <span id="valY" style="color:var(--text);">0</span>%
+      </div>
+    </section>
+
+    <!-- Center: Control Panel & Gauges -->
+    <section class="card center-panel">
+      <div class="card-title">Cockpit Controls</div>
+
+      <!-- Left / Right Motor Gauges -->
+      <div class="motor-gauges">
+        <div class="gauge-col">
+          <div class="gauge-bar-wrapper">
+            <div class="gauge-bar" id="motorLeftBar"></div>
+          </div>
+          <span class="gauge-val" id="motorLeftVal">0%</span>
+          <span>LEFT</span>
+        </div>
+        <div class="gauge-col">
+          <div class="gauge-bar-wrapper">
+            <div class="gauge-bar" id="motorRightBar"></div>
+          </div>
+          <span class="gauge-val" id="motorRightVal">0%</span>
+          <span>RIGHT</span>
+        </div>
+      </div>
+
+      <!-- Speed Profile Modes -->
+      <div class="mode-group">
+        <button class="btn-mode" data-mode="eco" onclick="setSpeedMode('eco')">ECO (50%)</button>
+        <button class="btn-mode active" data-mode="sport" onclick="setSpeedMode('sport')">SPORT (80%)</button>
+        <button class="btn-mode" data-mode="turbo" onclick="setSpeedMode('turbo')">TURBO (100%)</button>
+      </div>
+
+      <!-- Steering Trim -->
+      <div class="slider-group">
+        <div class="slider-header">
+          <span>Steering Trim</span>
+          <span id="trimVal">0</span>
+        </div>
+        <input type="range" id="trimSlider" min="-30" max="30" value="0" oninput="updateTrim(this.value)">
+      </div>
+
+      <!-- Action Buttons -->
+      <div class="action-grid">
+        <button class="btn-action" id="btnLight" onclick="toggleHeadlight()">
+          💡 Light
+        </button>
+        <button class="btn-action" id="btnHorn" onmousedown="triggerHorn(true)" onmouseup="triggerHorn(false)" ontouchstart="triggerHorn(true)" ontouchend="triggerHorn(false)">
+          📢 Horn
+        </button>
+        <button class="btn-action btn-stop" onclick="emergencyBrake()">
+          🛑 EMERGENCY STOP
+        </button>
+      </div>
+    </section>
+
+    <!-- Right: Telemetry / Camera / Track Log -->
+    <section class="card">
+      <div class="card-title">Live Telemetry & Diagnostics</div>
+      <div style="flex:1; display:flex; flex-direction:column; justify-content:center; gap:16px; padding: 12px; background: rgba(0,0,0,0.2); border-radius: 8px;">
+        <div style="display:flex; justify-content:space-between; border-bottom:1px solid var(--border); padding-bottom:6px;">
+          <span style="color:var(--text-dim)">Control Mode</span>
+          <strong id="activeInputMode">Touch / Web</strong>
+        </div>
+        <div style="display:flex; justify-content:space-between; border-bottom:1px solid var(--border); padding-bottom:6px;">
+          <span style="color:var(--text-dim)">Packet Frequency</span>
+          <strong id="hzCounter">0 Hz</strong>
+        </div>
+        <div style="display:flex; justify-content:space-between; border-bottom:1px solid var(--border); padding-bottom:6px;">
+          <span style="color:var(--text-dim)">Battery Voltage</span>
+          <strong id="diagBat">0.00 V</strong>
+        </div>
+        <div style="display:flex; justify-content:space-between; border-bottom:1px solid var(--border); padding-bottom:6px;">
+          <span style="color:var(--text-dim)">IP Host</span>
+          <strong id="ipHost">192.168.4.1</strong>
+        </div>
+        <div style="display:flex; justify-content:space-between;">
+          <span style="color:var(--text-dim)">Failsafe Watchdog</span>
+          <strong style="color:var(--green)">ARMED (300ms)</strong>
+        </div>
+      </div>
+      <div style="margin-top:10px; font-size: 0.72rem; color: var(--text-dim); text-align: center;">
+        Plug in a USB / Bluetooth Gamepad for direct analog precision.
+      </div>
+    </section>
+  </main>
+
+  <!-- Footer with Shortcuts -->
+  <footer>
+    <div class="keyboard-hint">
+      <span>Keyboard: <span class="key-badge">W</span> <span class="key-badge">A</span> <span class="key-badge">S</span> <span class="key-badge">D</span> / Arrows</span>
+      <span>Brake: <span class="key-badge">SPACE</span></span>
+      <span>Turbo: <span class="key-badge">SHIFT</span></span>
+      <span>Horn: <span class="key-badge">H</span></span>
+    </div>
+    <div>Firmware: v2.4-PRO | ROBO Race Bot</div>
+  </footer>
+
+  <script>
+    // --- State & Settings ---
+    let ws = null;
+    let targetX = 0; // -100 to +100
+    let targetY = 0; // -100 to +100 (forward = +100)
+    let speedLimit = 0.8; // 80% Sport default
+    let steeringTrim = 0;
+    let headlightState = false;
+    let hornState = false;
+
+    let pingStart = 0;
+    let packetsSent = 0;
+    let lastHzReset = Date.now();
+    let gamepadConnected = false;
+
+    // Detect Host for WebSocket
+    const wsHost = window.location.hostname || "192.168.4.1";
+    const wsPort = window.location.port || "80";
+    const wsUrl = `ws://${wsHost}:${wsPort}/ws`;
+    document.getElementById("ipHost").innerText = wsHost;
+
+    // --- WebSocket Client ---
+    function connectWS() {
+      try {
+        ws = new WebSocket(wsUrl);
+      } catch (e) {
+        console.error("WS Create Error:", e);
+      }
+
+      ws.onopen = () => {
+        document.getElementById("statusBadge").classList.add("connected");
+        document.getElementById("statusText").innerText = "CONNECTED";
+        document.getElementById("statusText").style.color = "var(--green)";
+        measurePing();
+      };
+
+      ws.onclose = () => {
+        document.getElementById("statusBadge").classList.remove("connected");
+        document.getElementById("statusText").innerText = "DISCONNECTED";
+        document.getElementById("statusText").style.color = "var(--red)";
+        setTimeout(connectWS, 1500); // Auto-reconnect
+      };
+
+      ws.onerror = () => {
+        ws.close();
+      };
+
+      ws.onmessage = (evt) => {
+        try {
+          const data = JSON.parse(evt.data);
+          if (data.type === "pong") {
+            const rtt = Date.now() - pingStart;
+            document.getElementById("pingVal").innerText = `${rtt} ms`;
+          } else if (data.type === "telemetry") {
+            const v = data.battery || 0;
+            document.getElementById("batteryVal").innerText = `${v.toFixed(2)} V`;
+            document.getElementById("diagBat").innerText = `${v.toFixed(2)} V`;
+          }
+        } catch(e) {}
+      };
+    }
+
+    function measurePing() {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        pingStart = Date.now();
+        ws.send(JSON.stringify({ type: "ping" }));
+      }
+      setTimeout(measurePing, 2000);
+    }
+
+    connectWS();
+
+    // --- Virtual Joystick (Canvas) ---
+    const canvas = document.getElementById("joystickCanvas");
+    const ctx = canvas.getContext("2d");
+    let isDragging = false;
+    let joyX = canvas.width / 2;
+    let joyY = canvas.height / 2;
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+    const maxRadius = canvas.width * 0.38;
+
+    function drawJoystick(x, y) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Outer boundary guide
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, maxRadius, 0, Math.PI * 2);
+      ctx.strokeStyle = "rgba(88, 166, 255, 0.25)";
+      ctx.lineWidth = 4;
+      ctx.stroke();
+
+      // Crosshairs
+      ctx.beginPath();
+      ctx.moveTo(centerX - maxRadius, centerY);
+      ctx.lineTo(centerX + maxRadius, centerY);
+      ctx.moveTo(centerX, centerY - maxRadius);
+      ctx.lineTo(centerX, centerY + maxRadius);
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Connector line
+      ctx.beginPath();
+      ctx.moveTo(centerX, centerY);
+      ctx.lineTo(x, y);
+      ctx.strokeStyle = "rgba(88, 166, 255, 0.4)";
+      ctx.lineWidth = 3;
+      ctx.stroke();
+
+      // Thumb stick head
+      const grad = ctx.createRadialGradient(x, y, 4, x, y, 28);
+      grad.addColorStop(0, "#79c0ff");
+      grad.addColorStop(1, "#1f6feb");
+
+      ctx.beginPath();
+      ctx.arc(x, y, 26, 0, Math.PI * 2);
+      ctx.fillStyle = grad;
+      ctx.shadowColor = "rgba(88, 166, 255, 0.6)";
+      ctx.shadowBlur = 12;
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+
+    drawJoystick(centerX, centerY);
+
+    function updateStickPosition(clientX, clientY) {
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+
+      let dx = (clientX - rect.left) * scaleX - centerX;
+      let dy = (clientY - rect.top) * scaleY - centerY;
+
+      const dist = Math.hypot(dx, dy);
+      if (dist > maxRadius) {
+        dx = (dx / dist) * maxRadius;
+        dy = (dy / dist) * maxRadius;
+      }
+
+      joyX = centerX + dx;
+      joyY = centerY + dy;
+      drawJoystick(joyX, joyY);
+
+      // Normalize to -100 ... +100
+      targetX = Math.round((dx / maxRadius) * 100);
+      targetY = Math.round((-dy / maxRadius) * 100); // Inverted so UP is forward
+
+      document.getElementById("valX").innerText = targetX;
+      document.getElementById("valY").innerText = targetY;
+      document.getElementById("activeInputMode").innerText = "Touch / Mouse";
+    }
+
+    function resetStick() {
+      joyX = centerX;
+      joyY = centerY;
+      targetX = 0;
+      targetY = 0;
+      drawJoystick(centerX, centerY);
+      document.getElementById("valX").innerText = 0;
+      document.getElementById("valY").innerText = 0;
+    }
+
+    // Touch events
+    canvas.addEventListener("touchstart", (e) => {
+      isDragging = true;
+      updateStickPosition(e.touches[0].clientX, e.touches[0].clientY);
+    });
+    window.addEventListener("touchmove", (e) => {
+      if (isDragging && e.touches.length > 0) {
+        updateStickPosition(e.touches[0].clientX, e.touches[0].clientY);
+      }
+    });
+    window.addEventListener("touchend", () => {
+      if (isDragging) {
+        isDragging = false;
+        resetStick();
+      }
+    });
+
+    // Mouse events
+    canvas.addEventListener("mousedown", (e) => {
+      isDragging = true;
+      updateStickPosition(e.clientX, e.clientY);
+    });
+    window.addEventListener("mousemove", (e) => {
+      if (isDragging) {
+        updateStickPosition(e.clientX, e.clientY);
+      }
+    });
+    window.addEventListener("mouseup", () => {
+      if (isDragging) {
+        isDragging = false;
+        resetStick();
+      }
+    });
+
+    // --- Keyboard Control ---
+    const keysDown = {};
+    window.addEventListener("keydown", (e) => {
+      keysDown[e.key.toLowerCase()] = true;
+      if (e.code === "Space") {
+        emergencyBrake();
+        e.preventDefault();
+      }
+      handleKeyboardInput();
+    });
+
+    window.addEventListener("keyup", (e) => {
+      keysDown[e.key.toLowerCase()] = false;
+      if (e.key.toLowerCase() === "h") triggerHorn(false);
+      handleKeyboardInput();
+    });
+
+    function handleKeyboardInput() {
+      if (isDragging || gamepadConnected) return; // Prioritize analog controls
+
+      let kY = 0;
+      let kX = 0;
+
+      if (keysDown["w"] || keysDown["arrowup"]) kY += 100;
+      if (keysDown["s"] || keysDown["arrowdown"]) kY -= 100;
+      if (keysDown["a"] || keysDown["arrowleft"]) kX -= 100;
+      if (keysDown["d"] || keysDown["arrowright"]) kX += 100;
+      if (keysDown["shift"]) setSpeedMode("turbo");
+      if (keysDown["h"]) triggerHorn(true);
+
+      targetX = kX;
+      targetY = kY;
+
+      joyX = centerX + (targetX / 100) * maxRadius;
+      joyY = centerY - (targetY / 100) * maxRadius;
+      drawJoystick(joyX, joyY);
+
+      document.getElementById("valX").innerText = targetX;
+      document.getElementById("valY").innerText = targetY;
+      document.getElementById("activeInputMode").innerText = "Keyboard";
+    }
+
+    // --- HTML5 Gamepad API Support ---
+    window.addEventListener("gamepadconnected", (e) => {
+      gamepadConnected = true;
+      document.getElementById("gamepadVal").innerText = e.gamepad.id.split("(")[0].trim();
+      document.getElementById("gamepadVal").style.color = "var(--green)";
+    });
+
+    window.addEventListener("gamepaddisconnected", () => {
+      gamepadConnected = false;
+      document.getElementById("gamepadVal").innerText = "None";
+      document.getElementById("gamepadVal").style.color = "var(--text-dim)";
+    });
+
+    function pollGamepad() {
+      const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+      if (gamepads && gamepads[0]) {
+        const gp = gamepads[0];
+        // Standard mapping: Axis 0 = Left Stick X, Axis 1 = Left Stick Y
+        let gx = gp.axes[0] || 0;
+        let gy = -gp.axes[1] || 0;
+
+        // Deadzone filter
+        if (Math.abs(gx) < 0.1) gx = 0;
+        if (Math.abs(gy) < 0.1) gy = 0;
+
+        // Buttons
+        if (gp.buttons[0] && gp.buttons[0].pressed) triggerHorn(true); // Button A
+        if (gp.buttons[1] && gp.buttons[1].pressed) emergencyBrake();  // Button B
+        if (gp.buttons[5] && gp.buttons[5].pressed) setSpeedMode("turbo"); // RB Turbo
+
+        if (!isDragging) {
+          targetX = Math.round(gx * 100);
+          targetY = Math.round(gy * 100);
+          joyX = centerX + (targetX / 100) * maxRadius;
+          joyY = centerY - (targetY / 100) * maxRadius;
+          drawJoystick(joyX, joyY);
+          document.getElementById("valX").innerText = targetX;
+          document.getElementById("valY").innerText = targetY;
+          document.getElementById("activeInputMode").innerText = "Gamepad";
+        }
+      }
+      requestAnimationFrame(pollGamepad);
+    }
+    requestAnimationFrame(pollGamepad);
+
+    // --- Cockpit Actions & Modes ---
+    function setSpeedMode(mode) {
+      document.querySelectorAll(".btn-mode").forEach(b => b.classList.remove("active"));
+      document.querySelector(`.btn-mode[data-mode="${mode}"]`).classList.add("active");
+
+      if (mode === "eco") speedLimit = 0.5;
+      else if (mode === "sport") speedLimit = 0.8;
+      else if (mode === "turbo") speedLimit = 1.0;
+    }
+
+    function updateTrim(val) {
+      steeringTrim = parseInt(val);
+      document.getElementById("trimVal").innerText = (steeringTrim > 0 ? "+" : "") + steeringTrim;
+    }
+
+    function toggleHeadlight() {
+      headlightState = !headlightState;
+      const btn = document.getElementById("btnLight");
+      if (headlightState) btn.classList.add("active");
+      else btn.classList.remove("active");
+    }
+
+    function triggerHorn(state) {
+      hornState = state;
+      const btn = document.getElementById("btnHorn");
+      if (hornState) btn.classList.add("active");
+      else btn.classList.remove("active");
+    }
+
+    function emergencyBrake() {
+      resetStick();
+      targetX = 0;
+      targetY = 0;
+      sendControlPacket(true);
+    }
+
+    // --- Differential Drive Mixer ---
+    function computeMotorSpeeds() {
+      // Differential mixing: Left = Throttle + Steering; Right = Throttle - Steering
+      let throttle = targetY * speedLimit;
+      let steering = (targetX + steeringTrim) * speedLimit;
+
+      let leftSpeed = throttle + steering;
+      let rightSpeed = throttle - steering;
+
+      // Constrain to -100 ... +100
+      leftSpeed = Math.max(-100, Math.min(100, Math.round(leftSpeed)));
+      rightSpeed = Math.max(-100, Math.min(100, Math.round(rightSpeed)));
+
+      // Update GUI gauges
+      const lBar = document.getElementById("motorLeftBar");
+      const rBar = document.getElementById("motorRightBar");
+      lBar.style.height = Math.abs(leftSpeed) + "%";
+      rBar.style.height = Math.abs(rightSpeed) + "%";
+      lBar.style.background = leftSpeed < 0 ? "var(--red)" : "linear-gradient(to top, #2ea043, #58a6ff)";
+      rBar.style.background = rightSpeed < 0 ? "var(--red)" : "linear-gradient(to top, #2ea043, #58a6ff)";
+
+      document.getElementById("motorLeftVal").innerText = leftSpeed + "%";
+      document.getElementById("motorRightVal").innerText = rightSpeed + "%";
+
+      return { left: leftSpeed, right: rightSpeed };
+    }
+
+    // --- High-Speed Transmission Loop (30Hz - 50Hz) ---
+    function sendControlPacket(isEmergency = false) {
+      const speeds = computeMotorSpeeds();
+      const packet = {
+        type: "ctrl",
+        l: isEmergency ? 0 : speeds.left,
+        r: isEmergency ? 0 : speeds.right,
+        light: headlightState ? 1 : 0,
+        horn: hornState ? 1 : 0
+      };
+
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(packet));
+        packetsSent++;
+      }
+    }
+
+    // 40Hz Control Loop (25ms)
+    setInterval(() => {
+      sendControlPacket();
+    }, 25);
+
+    // Hz Counter Loop
+    setInterval(() => {
+      const now = Date.now();
+      const elapsed = (now - lastHzReset) / 1000;
+      const hz = Math.round(packetsSent / elapsed);
+      document.getElementById("hzCounter").innerText = `${hz} Hz`;
+      packetsSent = 0;
+      lastHzReset = now;
+    }, 1000);
+  </script>
+</body>
+</html>

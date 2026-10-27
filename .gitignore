@@ -1,0 +1,14 @@
+# Compiled binaries and builds
+.pio/
+build/
+*.bin
+*.elf
+*.hex
+
+# OS & Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.bak
