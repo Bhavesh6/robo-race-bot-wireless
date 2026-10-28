@@ -13,10 +13,10 @@ The **ROBO Race Bot Wireless** uses the **ESP-NOW** protocol from Espressif Syst
                  |                                               |
                  |-------- [ CONTROL PACKET (200 Hz) ] --------->|
                  |         (Every 5 ms: Speed, Steering, Brake)  |
-                 |                                               | (Executes Motors)
+                 |                                               | (Executes Motors / Auto-Flip)
                  |                                               |
                  |<------- [ TELEMETRY PACKET (10 Hz) ] ---------|
-                 |         (Every 100 ms: Voltage, Amps, Temps)  |
+                 |         (Every 100 ms: Voltage, Temps, Flip)  |
                  |                                               |
 ```
 
@@ -54,7 +54,9 @@ typedef struct __attribute__((packed)) {
     int8_t   temp_left_drv_c;   // DS18B20 2: Left BTS7960 heatsink temp in °C
     int8_t   temp_right_drv_c;  // DS18B20 3: Right BTS7960 heatsink temp in °C
     uint8_t  battery_percent;   // Calculated remaining battery percentage (0 - 100%)
-    uint8_t  status_flags;      // Bit 0: Low-voltage warning, Bit 1: Over-temp warning
+    uint8_t  status_flags;      // Bit 0: Low-voltage warning
+                                // Bit 1: Over-temperature warning
+                                // Bit 2: Inverted / Flipped state (1 = Flipped)
 } BotTelemetryPacket;
 ```
 
@@ -87,5 +89,4 @@ If the remote is powered off, goes out of range, or suffers interference:
 * If `(millis() - last_packet_time) > 100 ms`:
   1. Both BTS7960 drivers are immediately set to **0% PWM**.
   2. Electronic active braking engages to bring the robot to an immediate halt.
-  3. Status LED / buzzer emits a signal-loss warning pulse.
 * The moment a new packet arrives, the watchdog resets and normal driving resumes instantly.

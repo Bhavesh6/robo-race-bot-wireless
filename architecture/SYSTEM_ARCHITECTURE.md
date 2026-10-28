@@ -2,7 +2,7 @@
 
 ## 1. High-Level System Overview
 
-The **ROBO Race Bot Wireless** is an ultra-low-latency, competition-grade 4WD robotics racing platform engineered for rapid reflex response, high torque delivery, and real-time telemetry.
+The **ROBO Race Bot Wireless** is an ultra-low-latency, competition-grade 4WD robotics racing platform engineered for rapid reflex response, high torque delivery, real-time telemetry, and inverted-chassis race resilience.
 
 ```
        +-----------------------------------------------------------+
@@ -12,13 +12,14 @@ The **ROBO Race Bot Wireless** is an ultra-low-latency, competition-grade 4WD ro
        |  - 2x Global Speed Trigger Buttons (Base, Preset 1, 2)    |
        |  - 0.96" SSD1306 I2C OLED Display (Live Cockpit Data)     |
        |  - EC11 Rotary Encoder + Pushbutton (On-Remote Settings)  |
+       |  - Coin Haptic Vibration Motor (Speed Shift & Alerts)     |
        |  - Non-Volatile Flash Memory (Stores All User Settings)   |
        +-----------------------------+-----------------------------+
                                      |
                                      |  ESP-NOW (2.4 GHz Bare-Metal MAC)
                                      |  - 200 Hz Packet Rate (Every 5ms)
                                      |  - Latency < 1.5 - 2.5 ms
-                                     |  - Bidirectional Telemetry
+                                     |  - Bidirectional Telemetry & Failsafe
                                      v
        +-----------------------------------------------------------+
        |                 ROBOT RECEIVER & CHASSIS (RX)             |
@@ -26,6 +27,8 @@ The **ROBO Race Bot Wireless** is an ultra-low-latency, competition-grade 4WD ro
        |  - Dual-Core FreeRTOS Architecture (Reflex vs Background) |
        |  - 20 kHz Hardware MCPWM Outputs (Zero Motor Coil Whine)  |
        |  - Native USB-C Flashing/Telemetry Port (GPIO 19/20)      |
+       |  - MPU-6050 6-Axis IMU (Auto-Invert Flip Remapping)       |
+       |  - 5-Layer Motor EMF & Inductive Spike Protection Shield  |
        +-----------------------------+-----------------------------+
                                      |
          +---------------------------+---------------------------+
@@ -48,9 +51,9 @@ Left-Front  Left-Rear                                   Right-Front Right-Rear
 
 ---
 
-## 2. Power Architecture & Battery Management
+## 2. Power Architecture & EMF Protection Shield
 
-The bot uses an internal, permanently mounted **3S 11.1V–12.6V 2200mAh LiPo battery (40C–80C burst)**.
+The bot is powered by an internal, permanently mounted **3S 11.1V–12.6V 2200mAh LiPo battery (40C–80C burst)**.
 
 ```
                          +-----------------------------+
@@ -60,30 +63,58 @@ The bot uses an internal, permanently mounted **3S 11.1V–12.6V 2200mAh LiPo ba
                              [ Master 30A Power Switch ]
                                         |
                +------------------------+------------------------+
-               |                                                 |
-               v 12V High-Current Rail                           v 12V Logic Tap
-      +------------------+                               +------------------+
-      | 2x BTS7960       |                               | DC-DC Step-Down  |
-      | Motor Drivers    |                               | Buck Converter   |
-      | (43A Peak Each)  |                               | (12V -> 3.3V/5V) |
-      +--------+---------+                               +--------+---------+
-               |                                                  |
-               v                                                  v
-      [ 4x Johnson Motors ]                              [ ESP32-S3 Module ]
-      (Peak ~15A per side)                               (Clean 3.3V Power)
+               | (High-Current 12V Rail)                         | (Logic Power Tap)
+               v                                                 v
+      +------------------+                             [ 1N5819 Schottky Diode ]
+      | 2x BTS7960       |                                       |
+      | Motor Drivers    |                                 [ 1000 µF 25V ]
+      | (43A Peak Each)  |                                 Buffer Capacitor
+      +--------+---------+                                       |
+               |                                                 v
+               v                                       +------------------+
+      [ 4x Johnson Motors ]                            | DC-DC Step-Down  |
+      (Peak ~15A per side)                             | Buck Converter   |
+      - 3x 100nF Snubbers/motor                        | (12V -> 3.3V)    |
+                                                       +--------+---------+
+                                                                |
+                                                                v
+                                                       [ ESP32-S3 Module ]
 ```
 
-### Chassis External Interfaces (No Disassembly Needed):
-1. **Master Power Toggle Switch:** Physically isolates the battery from all electronics.
-2. **XT60 Male Socket (Flush Panel Mount):** Connects external LiPo balance charger directly to battery terminals.
-3. **3S JST-XH 4-Pin Balance Port:** Exposes all 3 individual cell taps for balanced charging.
-4. **USB Type-C Port:** Direct link to ESP32-S3 GPIO 19 (`D-`) and GPIO 20 (`D+`) for one-click flashing and serial monitoring.
+### The 5-Layer Motor EMF & Noise Shield:
+1. **Motor Snubbers:** Three 100nF 50V ceramic capacitors soldered directly across every motor's terminals (+ to -, + to can, - to can) suppress brush arcing at the physical source.
+2. **Power Isolation Diode:** A Schottky diode (1N5819 / SS34) prevents the motors from pulling power out of the logic buffer capacitor during voltage sags.
+3. **1000 µF Low-ESR Buffer Capacitor:** Absorbs inductive back-EMF spikes when motors reverse suddenly, ensuring zero brownout resets on the ESP32-S3.
+4. **Star Grounding:** High-current motor ground returns directly to the battery XT60; the ESP32 logic ground is wired independently to the central ground point to eliminate ground bounce.
+5. **External U.FL Antenna:** Mounted on the outside chassis wall, isolated from internal electrical noise.
 
 ---
 
-## 3. Real-Time Multiprocessing Model (FreeRTOS)
+## 3. Auto-Invert Flip Remapping (Zero-Lag Orientation Adaptation)
 
-To ensure **zero control lag**, the ESP32-S3 separates critical motor reflexes from background sensor polling across its two 240MHz Xtensa cores:
+In competitive racing, invertible tank bots often get flipped upside down during crashes or collisions. 
+
+```
+NORMAL ORIENTATION (Az > +0.3g)                FLIPPED ORIENTATION (Az < -0.3g)
+      +----------+                                    +----------+
+  [L] |  FRONT   | [R]                            [R] |  BOTTOM  | [L]
+      +----------+                                    +----------+
+ Left = Left Motor, Fwd = Fwd                    Left = -Right Motor, Fwd = -Rev Motor
+```
+
+* **Core 0 Sensor Polling:** Reads the MPU-6050 accelerometer Z-axis ($A_z$) at 50 Hz. If $A_z < -0.3g$ for $> 50\text{ms}$ (anti-bounce filter), it sets `is_flipped = true`.
+* **Core 1 Zero-Lag Execution:** Remapping takes **less than 5 nanoseconds (1 CPU cycle)**:
+  ```cpp
+  if (is_flipped) {
+      actual_left  = -desired_right;
+      actual_right = -desired_left;
+  }
+  ```
+* **Driver Benefit:** The driver does **NOT** need to rotate the remote or mentally reverse controls. You press forward, the bot drives forward; you press left, the bot turns left!
+
+---
+
+## 4. Real-Time Multiprocessing Model (FreeRTOS)
 
 ```
 +-------------------------------------------------------------------------+
@@ -92,9 +123,10 @@ To ensure **zero control lag**, the ESP32-S3 separates critical motor reflexes f
 |                      Frequency: 200 Hz (Every 5 ms)                     |
 +-------------------------------------------------------------------------+
 |  1. ESP-NOW Radio Receive (Sub-1ms packet capture)                      |
-|  2. 1:1 Instant Tank-Drive Logic (No Slew Rate / No Artificial Ramp)   |
-|  3. Hardware 20 kHz MCPWM Output Updates (< 10 microseconds)            |
-|  4. Hardware Failsafe Watchdog (Auto-stops if remote dies for > 100ms)  |
+|  2. Auto-Invert Flip Remapping (1 CPU cycle execution)                  |
+|  3. 1:1 Instant Tank-Drive Logic (No Slew Rate / No Artificial Ramp)   |
+|  4. Hardware 20 kHz MCPWM Output Updates (< 10 microseconds)            |
+|  5. Hardware Failsafe Watchdog (Auto-stops if remote dies for > 100ms)  |
 +-------------------------------------------------------------------------+
 
 +-------------------------------------------------------------------------+
@@ -102,22 +134,10 @@ To ensure **zero control lag**, the ESP32-S3 separates critical motor reflexes f
 |                      Priority: 1 (Lowest Background)                    |
 |                      Frequency: Interleaved Periodic Timers             |
 +-------------------------------------------------------------------------+
-|  1. Motor Current Sensing: Left & Right BTS7960 IS pins (50 Hz)         |
-|  2. Battery Voltage Monitoring: 3-Cell Individual ADC reads (10 Hz)     |
-|  3. Digital Temperatures: 3x DS18B20 1-Wire non-blocking reads (1 Hz)   |
-|  4. Telemetry Transmitter: Bundles telemetry back to Remote (10 Hz)     |
+|  1. MPU-6050 Orientation Read: Detects roll/flip state (50 Hz)          |
+|  2. Motor Current Sensing: Left & Right BTS7960 IS pins (50 Hz)         |
+|  3. Battery Voltage Monitoring: 3-Cell Individual ADC reads (10 Hz)     |
+|  4. Digital Temperatures: 3x DS18B20 1-Wire non-blocking reads (1 Hz)   |
+|  5. Telemetry Transmitter: Bundles telemetry back to Remote (10 Hz)     |
 +-------------------------------------------------------------------------+
 ```
-
----
-
-## 4. Safety Protection Thresholds
-
-| Sensor Target | Normal Range | Warning Threshold | Emergency Action |
-|---|---|---|---|
-| **3S LiPo Cell** | $3.70\text{V} - 4.20\text{V}$ | **$< 3.40\text{V}$** | Warning flag on Remote screen |
-| **3S LiPo Total** | $11.1\text{V} - 12.6\text{V}$ | **$< 10.20\text{V}$** | Buzzer alert + Emergency Cutoff |
-| **Battery Temp** | $25^\circ\text{C} - 42^\circ\text{C}$ | **$> 50^\circ\text{C}$** | 25% Limp Mode to protect cells |
-| **BTS7960 Temp** | $30^\circ\text{C} - 65^\circ\text{C}$ | **$> 80^\circ\text{C}$** | Driver thermal warning alert |
-| **Motor Stall** | $0\text{A} - 4\text{A}$ running | **$> 12\text{A}$ sustained** | Protects motor brushes from burnout |
-| **Radio Link** | Continuous 200 Hz | **$> 100\text{ms}$ no packet** | Immediate 0% Motor Cut (Failsafe) |
