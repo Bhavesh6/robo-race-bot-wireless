@@ -93,9 +93,14 @@ void updateHaptic() {
 }
 
 // ============================================================================
-// ESP-NOW TELEMETRY RECEIVE CALLBACK
+// ESP-NOW TELEMETRY RECEIVE CALLBACK (Cross-version compatible)
 // ============================================================================
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
 void OnDataRecv(const esp_now_recv_info *recv_info, const uint8_t *data, int len) {
+    const uint8_t *srcMac = recv_info->src_addr;
+#else
+void OnDataRecv(const uint8_t *srcMac, const uint8_t *data, int len) {
+#endif
     if (len == sizeof(BotTelemetryPacket)) {
         BotTelemetryPacket* pkt = (BotTelemetryPacket*)data;
         if (pkt->magic == PROTOCOL_MAGIC_BYTE) {
@@ -103,7 +108,7 @@ void OnDataRecv(const esp_now_recv_info *recv_info, const uint8_t *data, int len
             g_lastTelemTime = millis();
 
             // Auto-pair with bot's specific MAC
-            memcpy(g_botMac, recv_info->src_addr, 6);
+            memcpy(g_botMac, srcMac, 6);
 
             // Haptic alert on critical warnings
             if (pkt->status_flags & FLAG_LOW_VOLTAGE || pkt->status_flags & FLAG_OVER_TEMP) {
@@ -123,7 +128,6 @@ uint16_t getActiveTargetRpm(bool t1, bool t2) {
 }
 
 int16_t rpmToPwm(uint16_t rpm) {
-    // 600 RPM = 255 PWM (linear scaling)
     return (int16_t)constrain((rpm * 255) / 600, 50, 255);
 }
 

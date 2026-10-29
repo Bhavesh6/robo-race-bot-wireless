@@ -49,10 +49,6 @@
 // PWM Hardware Configuration (20 kHz Ultrasonic Frequency)
 #define PWM_FREQ            20000 // 20 kHz (Inaudible, instant coil saturation)
 #define PWM_RES             8     // 8-bit resolution (0 - 255)
-#define CH_LEFT_RPWM        0
-#define CH_LEFT_LPWM        1
-#define CH_RIGHT_RPWM       2
-#define CH_RIGHT_LPWM       3
 
 // Voltage Divider Calibration Multipliers
 #define RATIO_CELL1         2.000f // 10k + 10k / 10k
@@ -62,11 +58,11 @@
 // ============================================================================
 // GLOBAL VOLATILE SHARED STATE (Atomic lock-free exchange between cores)
 // ============================================================================
-volatile BotControlPacket  g_controlPacket;
+volatile BotControlPacket   g_controlPacket;
 volatile BotTelemetryPacket g_telemetryPacket;
-volatile uint32_t          g_lastPacketTime = 0;
-volatile bool              g_isFlipped = false;
-volatile bool              g_failsafeActive = true;
+volatile uint32_t           g_lastPacketTime = 0;
+volatile bool               g_isFlipped = false;
+volatile bool               g_failsafeActive = true;
 
 // Remote MAC Address storage (Learned on first packet or paired)
 uint8_t g_remoteMac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -75,7 +71,6 @@ bool    g_remotePaired = false;
 // 1-Wire Sensors Setup (Core 0 only)
 OneWire oneWire(PIN_ONEWIRE_BUS);
 DallasTemperature ds18b20(&oneWire);
-DeviceAddress addrBat, addrDrvL, addrDrvR;
 
 // Tasks
 TaskHandle_t hReflexTask;
@@ -89,9 +84,14 @@ void readBatteryAndCurrent();
 void readTemperaturesAsync();
 
 // ============================================================================
-// ESP-NOW RECEIVE CALLBACK (Executes on Core 1 radio interrupt)
+// ESP-NOW RECEIVE CALLBACK (Cross-version compatible Core 2.x and Core 3.x)
 // ============================================================================
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
 void OnDataRecv(const esp_now_recv_info *recv_info, const uint8_t *data, int len) {
+    const uint8_t *srcMac = recv_info->src_addr;
+#else
+void OnDataRecv(const uint8_t *srcMac, const uint8_t *data, int len) {
+#endif
     if (len == sizeof(BotControlPacket)) {
         BotControlPacket* pkt = (BotControlPacket*)data;
         if (pkt->magic == PROTOCOL_MAGIC_BYTE) {
@@ -101,7 +101,7 @@ void OnDataRecv(const esp_now_recv_info *recv_info, const uint8_t *data, int len
 
             // Learn remote MAC address for bidirectional telemetry
             if (!g_remotePaired) {
-                memcpy(g_remoteMac, recv_info->src_addr, 6);
+                memcpy(g_remoteMac, srcMac, 6);
                 esp_now_peer_info_t peerInfo = {};
                 memcpy(peerInfo.peer_addr, g_remoteMac, 6);
                 peerInfo.channel = 1;
@@ -158,40 +158,40 @@ void motorReflexTask(void *pvParameters) {
 
 // ============================================================================
 // HARDWARE BREAK-BEFORE-MAKE MOTOR DRIVE (Shoot-Through Protection)
+// Compatible with both Arduino Core v2.x and v3.x (using pin parameter)
 // ============================================================================
 void applyMotorsBreakBeforeMake(int16_t left, int16_t right) {
-    // Clamp to 8-bit limits (-255 to +255)
     left  = constrain(left, -255, 255);
     right = constrain(right, -255, 255);
 
     // Left Motor Channel
     if (left > 0) {
-        ledcWrite(CH_LEFT_LPWM, 0);
-        esp_rom_delay_us(3); // 3 µs hardware dead-time
-        ledcWrite(CH_LEFT_RPWM, left);
+        ledcWrite(PIN_LEFT_LPWM, 0);
+        esp_rom_delay_us(3); // 3 µs hardware dead-time to prevent shoot-through
+        ledcWrite(PIN_LEFT_RPWM, left);
     } else if (left < 0) {
-        ledcWrite(CH_LEFT_RPWM, 0);
+        ledcWrite(PIN_LEFT_RPWM, 0);
         esp_rom_delay_us(3);
-        ledcWrite(CH_LEFT_LPWM, -left);
+        ledcWrite(PIN_LEFT_LPWM, -left);
     } else {
         // Electronic Active Brake: both LOW
-        ledcWrite(CH_LEFT_RPWM, 0);
-        ledcWrite(CH_LEFT_LPWM, 0);
+        ledcWrite(PIN_LEFT_RPWM, 0);
+        ledcWrite(PIN_LEFT_LPWM, 0);
     }
 
     // Right Motor Channel
     if (right > 0) {
-        ledcWrite(CH_RIGHT_LPWM, 0);
+        ledcWrite(PIN_RIGHT_LPWM, 0);
         esp_rom_delay_us(3);
-        ledcWrite(CH_RIGHT_RPWM, right);
+        ledcWrite(PIN_RIGHT_RPWM, right);
     } else if (right < 0) {
-        ledcWrite(CH_RIGHT_RPWM, 0);
+        ledcWrite(PIN_RIGHT_RPWM, 0);
         esp_rom_delay_us(3);
-        ledcWrite(CH_RIGHT_LPWM, -right);
+        ledcWrite(PIN_RIGHT_LPWM, -right);
     } else {
         // Electronic Active Brake: both LOW
-        ledcWrite(CH_RIGHT_RPWM, 0);
-        ledcWrite(CH_RIGHT_LPWM, 0);
+        ledcWrite(PIN_RIGHT_RPWM, 0);
+        ledcWrite(PIN_RIGHT_LPWM, 0);
     }
 }
 
@@ -288,15 +288,15 @@ void readMPUOrientation() {
 void readBatteryAndCurrent() {
     static float filteredTotalMv = 12600.0f;
 
-    // Read raw ADC values (ADC1 safe with Wi-Fi)
-    int raw1 = analogRead(PIN_ADC_CELL1);
-    int raw2 = analogRead(PIN_ADC_CELL2);
-    int raw3 = analogRead(PIN_ADC_CELL3);
+    // Use ESP32-S3 factory eFuse calibrated analogReadMilliVolts!
+    // Eliminates raw ADC non-linearities automatically
+    uint32_t mv1 = analogReadMilliVolts(PIN_ADC_CELL1);
+    uint32_t mv2 = analogReadMilliVolts(PIN_ADC_CELL2);
+    uint32_t mv3 = analogReadMilliVolts(PIN_ADC_CELL3);
 
-    // Convert to millivolts using calibration dividers
-    float v1 = (raw1 / 4095.0f) * 3300.0f * RATIO_CELL1;
-    float v2 = (raw2 / 4095.0f) * 3300.0f * RATIO_CELL2;
-    float v3 = (raw3 / 4095.0f) * 3300.0f * RATIO_CELL3;
+    float v1 = mv1 * RATIO_CELL1;
+    float v2 = mv2 * RATIO_CELL2;
+    float v3 = mv3 * RATIO_CELL3;
 
     uint16_t c1 = (uint16_t)v1;
     uint16_t c2 = (uint16_t)max(0.0f, v2 - v1);
@@ -315,12 +315,12 @@ void readBatteryAndCurrent() {
     float pct = ((filteredTotalMv - 10200.0f) / (12600.0f - 10200.0f)) * 100.0f;
     g_telemetryPacket.battery_percent = (uint8_t)constrain(pct, 0.0f, 100.0f);
 
-    // Motor Current Sensing (BTS7960 IS pins)
-    int rawCurL = analogRead(PIN_ADC_LEFT_IS);
-    int rawCurR = analogRead(PIN_ADC_RIGHT_IS);
+    // Motor Current Sensing using calibrated millivolts
+    uint32_t mvCurL = analogReadMilliVolts(PIN_ADC_LEFT_IS);
+    uint32_t mvCurR = analogReadMilliVolts(PIN_ADC_RIGHT_IS);
     // 1k shunt: V = I * 1000 / 8500 => I(mA) = V(mV) * 8.5
-    g_telemetryPacket.left_current_ma  = (uint16_t)(((rawCurL / 4095.0f) * 3300.0f) * 8.5f);
-    g_telemetryPacket.right_current_ma = (uint16_t)(((rawCurR / 4095.0f) * 3300.0f) * 8.5f);
+    g_telemetryPacket.left_current_ma  = (uint16_t)(mvCurL * 8.5f);
+    g_telemetryPacket.right_current_ma = (uint16_t)(mvCurR * 8.5f);
 
     // Low voltage flag
     if (filteredTotalMv < 10200.0f || c1 < 3300 || c2 < 3300 || c3 < 3300) {
@@ -363,20 +363,19 @@ void setup() {
     digitalWrite(PIN_LEFT_EN, HIGH);  // Enable BTS7960 Left
     digitalWrite(PIN_RIGHT_EN, HIGH); // Enable BTS7960 Right
 
-    // 2. Hardware MCPWM Setup (20 kHz, 8-bit)
+    // 2. Hardware MCPWM Setup (20 kHz, 8-bit) - Arduino Core v3.0+ API
     ledcAttach(PIN_LEFT_RPWM, PWM_FREQ, PWM_RES);
     ledcAttach(PIN_LEFT_LPWM, PWM_FREQ, PWM_RES);
     ledcAttach(PIN_RIGHT_RPWM, PWM_FREQ, PWM_RES);
     ledcAttach(PIN_RIGHT_LPWM, PWM_FREQ, PWM_RES);
     applyMotorsBreakBeforeMake(0, 0); // Start locked in brake mode
 
-    // 3. Configure ADC Pins
-    analogReadResolution(12); // 12-bit (0 - 4095)
-    pinMode(PIN_ADC_CELL1, INPUT);
-    pinMode(PIN_ADC_CELL2, INPUT);
-    pinMode(PIN_ADC_CELL3, INPUT);
-    pinMode(PIN_ADC_LEFT_IS, INPUT);
-    pinMode(PIN_ADC_RIGHT_IS, INPUT);
+    // 3. Configure ADC Attenuation (12dB / 3.1V range for calibrated reads)
+    analogSetPinAttenuation(PIN_ADC_CELL1, ADC_ATTEN_DB_12);
+    analogSetPinAttenuation(PIN_ADC_CELL2, ADC_ATTEN_DB_12);
+    analogSetPinAttenuation(PIN_ADC_CELL3, ADC_ATTEN_DB_12);
+    analogSetPinAttenuation(PIN_ADC_LEFT_IS, ADC_ATTEN_DB_12);
+    analogSetPinAttenuation(PIN_ADC_RIGHT_IS, ADC_ATTEN_DB_12);
 
     // 4. Configure DS18B20 1-Wire (Non-blocking)
     ds18b20.begin();
