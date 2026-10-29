@@ -15,7 +15,11 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Preferences.h>
+#if __has_include("protocol.h")
+#include "protocol.h"
+#elif __has_include("../common/protocol.h")
 #include "../common/protocol.h"
+#endif
 
 // ============================================================================
 // HARDWARE PIN DEFINITIONS (ESP32 Standard)
@@ -108,7 +112,17 @@ void OnDataRecv(const uint8_t *srcMac, const uint8_t *data, int len) {
             g_lastTelemTime = millis();
 
             // Auto-pair with bot's specific MAC
-            memcpy(g_botMac, srcMac, 6);
+            if (!esp_now_is_peer_exist(srcMac)) {
+                esp_now_peer_info_t peer = {};
+                memcpy(peer.peer_addr, srcMac, 6);
+                peer.channel = 1;
+                peer.encrypt = false;
+                if (esp_now_add_peer(&peer) == ESP_OK) {
+                    memcpy(g_botMac, srcMac, 6);
+                }
+            } else {
+                memcpy(g_botMac, srcMac, 6);
+            }
 
             // Haptic alert on critical warnings
             if (pkt->status_flags & FLAG_LOW_VOLTAGE || pkt->status_flags & FLAG_OVER_TEMP) {

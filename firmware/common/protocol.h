@@ -8,7 +8,7 @@
 
 // ============================================================================
 // 1. CONTROL PACKET: Remote Controller (TX) -> Robot Receiver (RX)
-// Frequency: 200 Hz (Every 5 ms) | Size: 8 bytes
+// Frequency: 200 Hz (Every 5 ms) | Size: 9 bytes
 // ============================================================================
 typedef struct __attribute__((packed)) {
     uint8_t  magic;             // Protocol validation (0x52)

@@ -14,7 +14,13 @@
 #include <Wire.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include <esp_arduino_version.h>
+
+#if __has_include("protocol.h")
+#include "protocol.h"
+#elif __has_include("../common/protocol.h")
 #include "../common/protocol.h"
+#endif
 
 // ============================================================================
 // HARDWARE PIN DEFINITIONS (ESP32-S3)
@@ -54,6 +60,45 @@
 #define RATIO_CELL1         2.000f // 10k + 10k / 10k
 #define RATIO_CELL2         4.000f // 30k + 10k / 10k
 #define RATIO_CELL3         6.000f // 50k + 10k / 10k
+
+// ============================================================================
+// CROSS-VERSION COMPATIBILITY MACROS (Arduino ESP32 Core 2.x & Core 3.x)
+// ============================================================================
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
+  // Arduino ESP32 Core 3.x API (pin-based LEDC and DB_12 ADC)
+  #define MOTOR_PWM_INIT() do { \
+      ledcAttach(PIN_LEFT_RPWM, PWM_FREQ, PWM_RES); \
+      ledcAttach(PIN_LEFT_LPWM, PWM_FREQ, PWM_RES); \
+      ledcAttach(PIN_RIGHT_RPWM, PWM_FREQ, PWM_RES); \
+      ledcAttach(PIN_RIGHT_LPWM, PWM_FREQ, PWM_RES); \
+  } while(0)
+  #define WRITE_LEFT_RPWM(val)   ledcWrite(PIN_LEFT_RPWM, val)
+  #define WRITE_LEFT_LPWM(val)   ledcWrite(PIN_LEFT_LPWM, val)
+  #define WRITE_RIGHT_RPWM(val)  ledcWrite(PIN_RIGHT_RPWM, val)
+  #define WRITE_RIGHT_LPWM(val)  ledcWrite(PIN_RIGHT_LPWM, val)
+  #define ADC_MAX_ATTEN          ADC_ATTEN_DB_12
+#else
+  // Arduino ESP32 Core 2.x API (channel-based LEDC and 11db ADC)
+  #define CH_LEFT_RPWM   0
+  #define CH_LEFT_LPWM   1
+  #define CH_RIGHT_RPWM  2
+  #define CH_RIGHT_LPWM  3
+  #define MOTOR_PWM_INIT() do { \
+      ledcSetup(CH_LEFT_RPWM, PWM_FREQ, PWM_RES); \
+      ledcAttachPin(PIN_LEFT_RPWM, CH_LEFT_RPWM); \
+      ledcSetup(CH_LEFT_LPWM, PWM_FREQ, PWM_RES); \
+      ledcAttachPin(PIN_LEFT_LPWM, CH_LEFT_LPWM); \
+      ledcSetup(CH_RIGHT_RPWM, PWM_FREQ, PWM_RES); \
+      ledcAttachPin(PIN_RIGHT_RPWM, CH_RIGHT_RPWM); \
+      ledcSetup(CH_RIGHT_LPWM, PWM_FREQ, PWM_RES); \
+      ledcAttachPin(PIN_RIGHT_LPWM, CH_RIGHT_LPWM); \
+  } while(0)
+  #define WRITE_LEFT_RPWM(val)   ledcWrite(CH_LEFT_RPWM, val)
+  #define WRITE_LEFT_LPWM(val)   ledcWrite(CH_LEFT_LPWM, val)
+  #define WRITE_RIGHT_RPWM(val)  ledcWrite(CH_RIGHT_RPWM, val)
+  #define WRITE_RIGHT_LPWM(val)  ledcWrite(CH_RIGHT_LPWM, val)
+  #define ADC_MAX_ATTEN          ADC_11db
+#endif
 
 // ============================================================================
 // GLOBAL VOLATILE SHARED STATE (Atomic lock-free exchange between cores)
@@ -158,7 +203,7 @@ void motorReflexTask(void *pvParameters) {
 
 // ============================================================================
 // HARDWARE BREAK-BEFORE-MAKE MOTOR DRIVE (Shoot-Through Protection)
-// Compatible with both Arduino Core v2.x and v3.x (using pin parameter)
+// Cross-version compatible with Arduino ESP32 Core 2.x and 3.x
 // ============================================================================
 void applyMotorsBreakBeforeMake(int16_t left, int16_t right) {
     left  = constrain(left, -255, 255);
@@ -166,32 +211,32 @@ void applyMotorsBreakBeforeMake(int16_t left, int16_t right) {
 
     // Left Motor Channel
     if (left > 0) {
-        ledcWrite(PIN_LEFT_LPWM, 0);
+        WRITE_LEFT_LPWM(0);
         esp_rom_delay_us(3); // 3 µs hardware dead-time to prevent shoot-through
-        ledcWrite(PIN_LEFT_RPWM, left);
+        WRITE_LEFT_RPWM(left);
     } else if (left < 0) {
-        ledcWrite(PIN_LEFT_RPWM, 0);
+        WRITE_LEFT_RPWM(0);
         esp_rom_delay_us(3);
-        ledcWrite(PIN_LEFT_LPWM, -left);
+        WRITE_LEFT_LPWM(-left);
     } else {
         // Electronic Active Brake: both LOW
-        ledcWrite(PIN_LEFT_RPWM, 0);
-        ledcWrite(PIN_LEFT_LPWM, 0);
+        WRITE_LEFT_RPWM(0);
+        WRITE_LEFT_LPWM(0);
     }
 
     // Right Motor Channel
     if (right > 0) {
-        ledcWrite(PIN_RIGHT_LPWM, 0);
+        WRITE_RIGHT_LPWM(0);
         esp_rom_delay_us(3);
-        ledcWrite(PIN_RIGHT_RPWM, right);
+        WRITE_RIGHT_RPWM(right);
     } else if (right < 0) {
-        ledcWrite(PIN_RIGHT_RPWM, 0);
+        WRITE_RIGHT_RPWM(0);
         esp_rom_delay_us(3);
-        ledcWrite(PIN_RIGHT_LPWM, -right);
+        WRITE_RIGHT_LPWM(-right);
     } else {
         // Electronic Active Brake: both LOW
-        ledcWrite(PIN_RIGHT_RPWM, 0);
-        ledcWrite(PIN_RIGHT_LPWM, 0);
+        WRITE_RIGHT_RPWM(0);
+        WRITE_RIGHT_LPWM(0);
     }
 }
 
@@ -318,6 +363,7 @@ void readBatteryAndCurrent() {
     // Motor Current Sensing using calibrated millivolts
     uint32_t mvCurL = analogReadMilliVolts(PIN_ADC_LEFT_IS);
     uint32_t mvCurR = analogReadMilliVolts(PIN_ADC_RIGHT_IS);
+
     // 1k shunt: V = I * 1000 / 8500 => I(mA) = V(mV) * 8.5
     g_telemetryPacket.left_current_ma  = (uint16_t)(mvCurL * 8.5f);
     g_telemetryPacket.right_current_ma = (uint16_t)(mvCurR * 8.5f);
@@ -363,19 +409,16 @@ void setup() {
     digitalWrite(PIN_LEFT_EN, HIGH);  // Enable BTS7960 Left
     digitalWrite(PIN_RIGHT_EN, HIGH); // Enable BTS7960 Right
 
-    // 2. Hardware MCPWM Setup (20 kHz, 8-bit) - Arduino Core v3.0+ API
-    ledcAttach(PIN_LEFT_RPWM, PWM_FREQ, PWM_RES);
-    ledcAttach(PIN_LEFT_LPWM, PWM_FREQ, PWM_RES);
-    ledcAttach(PIN_RIGHT_RPWM, PWM_FREQ, PWM_RES);
-    ledcAttach(PIN_RIGHT_LPWM, PWM_FREQ, PWM_RES);
+    // 2. Hardware PWM Setup (20 kHz, 8-bit) - Universal Core 2.x & 3.x
+    MOTOR_PWM_INIT();
     applyMotorsBreakBeforeMake(0, 0); // Start locked in brake mode
 
-    // 3. Configure ADC Attenuation (12dB / 3.1V range for calibrated reads)
-    analogSetPinAttenuation(PIN_ADC_CELL1, ADC_ATTEN_DB_12);
-    analogSetPinAttenuation(PIN_ADC_CELL2, ADC_ATTEN_DB_12);
-    analogSetPinAttenuation(PIN_ADC_CELL3, ADC_ATTEN_DB_12);
-    analogSetPinAttenuation(PIN_ADC_LEFT_IS, ADC_ATTEN_DB_12);
-    analogSetPinAttenuation(PIN_ADC_RIGHT_IS, ADC_ATTEN_DB_12);
+    // 3. Configure ADC Attenuation (Universal Core 2.x & 3.x)
+    analogSetPinAttenuation(PIN_ADC_CELL1, ADC_MAX_ATTEN);
+    analogSetPinAttenuation(PIN_ADC_CELL2, ADC_MAX_ATTEN);
+    analogSetPinAttenuation(PIN_ADC_CELL3, ADC_MAX_ATTEN);
+    analogSetPinAttenuation(PIN_ADC_LEFT_IS, ADC_MAX_ATTEN);
+    analogSetPinAttenuation(PIN_ADC_RIGHT_IS, ADC_MAX_ATTEN);
 
     // 4. Configure DS18B20 1-Wire (Non-blocking)
     ds18b20.begin();
@@ -409,6 +452,6 @@ void setup() {
 }
 
 void loop() {
-    // Empty — FreeRTOS tasks handle everything across both cores
-    vTaskDelete(NULL);
+    // Background idle delay to keep Core 0 loop alive without starving other tasks
+    vTaskDelay(pdMS_TO_TICKS(1000));
 }
